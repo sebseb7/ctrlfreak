@@ -1,0 +1,10 @@
+**/target/
+**/*.rs.bk
+Cargo.lock
+node_modules/
+.env
+dist/
+*.log
+*.db
+*.db-shm
+*.db-wal

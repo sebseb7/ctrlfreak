@@ -1,0 +1,22 @@
+# Tapo Agent Configuration Example
+
+server_url = "ws://192.168.1.100:8080"
+api_key = "your-api-key-here"
+poll_interval_secs = 60
+
+# Define your Tapo devices below
+# Each device needs: ip, name, type (P100 or P110), tapo_email, tapo_password
+
+[[devices]]
+ip = "192.168.1.50"
+name = "grow-light-plug"
+type = "P110"
+tapo_email = "your@email.com"
+tapo_password = "your-tapo-password"
+
+[[devices]]
+ip = "192.168.1.51"
+name = "fan-plug"
+type = "P100"
+tapo_email = "your@email.com"
+tapo_password = "your-tapo-password"

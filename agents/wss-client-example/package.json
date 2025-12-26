@@ -1,0 +1,13 @@
+{
+    "name": "wss-client-example",
+    "version": "1.0.0",
+    "description": "Example client for TischlerCtrl WebSocket API",
+    "main": "lib.js",
+    "type": "module",
+    "scripts": {
+        "start": "node example.js"
+    },
+    "dependencies": {
+        "ws": "^8.18.0"
+    }
+}

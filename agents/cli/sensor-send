@@ -1,0 +1,119 @@
+#!/bin/bash
+#
+# sensor-send - CLI tool to send sensor data to TischlerCtrl server
+#
+# Usage:
+#   sensor-send <device> <channel> <value>
+#
+# Environment variables:
+#   SENSOR_API_KEY  - API key for authentication (required)
+#   SENSOR_SERVER   - WebSocket server URL (default: ws://localhost:8080)
+#
+# Examples:
+#   sensor-send growbox temperature 24.5
+#   sensor-send pump-1 pressure 1.2
+#
+# Dependencies:
+#   - websocat (install via: cargo install websocat)
+#
+
+set -e
+
+# Configuration
+API_KEY="${SENSOR_API_KEY:-}"
+SERVER="${SENSOR_SERVER:-ws://localhost:8080}"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+NC='\033[0m' # No Color
+
+# Usage function
+usage() {
+    echo "Usage: sensor-send <device> <channel> <value>"
+    echo ""
+    echo "Environment variables:"
+    echo "  SENSOR_API_KEY  - API key for authentication (required)"
+    echo "  SENSOR_SERVER   - WebSocket server URL (default: ws://localhost:8080)"
+    echo ""
+    echo "Examples:"
+    echo "  sensor-send growbox temperature 24.5"
+    echo "  sensor-send pump-1 pressure 1.2"
+    exit 1
+}
+
+# Check for websocat
+if ! command -v websocat &> /dev/null; then
+    echo -e "${RED}Error: websocat is not installed${NC}"
+    echo "Install via: cargo install websocat"
+    echo "Or: apt install websocat (on some systems)"
+    exit 1
+fi
+
+# Check arguments
+if [ $# -lt 3 ]; then
+    usage
+fi
+
+DEVICE="$1"
+CHANNEL="$2"
+VALUE="$3"
+
+# Validate value is a number
+if ! [[ "$VALUE" =~ ^-?[0-9]*\.?[0-9]+$ ]]; then
+    echo -e "${RED}Error: value must be a number${NC}"
+    exit 1
+fi
+
+# Check API key
+if [ -z "$API_KEY" ]; then
+    echo -e "${RED}Error: SENSOR_API_KEY environment variable is required${NC}"
+    exit 1
+fi
+
+# Create JSON messages
+AUTH_MSG=$(cat <<EOF
+{"type":"auth","apiKey":"$API_KEY"}
+EOF
+)
+
+DATA_MSG=$(cat <<EOF
+{"type":"data","readings":[{"device":"$DEVICE","channel":"$CHANNEL","value":$VALUE}]}
+EOF
+)
+
+# Send data via websocat
+# We use a short-lived connection: auth, send data, close
+RESPONSE=$(echo -e "${AUTH_MSG}\n${DATA_MSG}" | websocat -n1 "$SERVER" 2>&1) || {
+    echo -e "${RED}Error: Failed to connect to server${NC}"
+    exit 1
+}
+
+# Check response
+if echo "$RESPONSE" | grep -q '"success":true'; then
+    if echo "$RESPONSE" | grep -q '"type":"ack"'; then
+        echo -e "${GREEN}✓ Data sent successfully${NC}"
+        echo "  Device:  $DEVICE"
+        echo "  Channel: $CHANNEL"
+        echo "  Value:   $VALUE"
+        exit 0
+    fi
+fi
+
+# Parse error if present
+if echo "$RESPONSE" | grep -q '"type":"error"'; then
+    ERROR=$(echo "$RESPONSE" | grep -o '"error":"[^"]*"' | cut -d'"' -f4)
+    echo -e "${RED}Error: $ERROR${NC}"
+    exit 1
+fi
+
+# Auth failed
+if echo "$RESPONSE" | grep -q '"success":false'; then
+    echo -e "${RED}Error: Authentication failed${NC}"
+    exit 1
+fi
+
+# Unknown response
+echo -e "${RED}Error: Unexpected response from server${NC}"
+echo "$RESPONSE"
+exit 1

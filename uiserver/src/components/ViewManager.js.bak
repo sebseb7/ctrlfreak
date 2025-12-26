@@ -1,0 +1,222 @@
+import React, { useState, useEffect } from 'react';
+import {
+    Container, Typography, List, ListItem, ListItemText, ListItemIcon,
+    Button, TextField, Dialog, DialogTitle, DialogContent, DialogActions,
+    FormControl, InputLabel, Select, MenuItem, Box, Chip, IconButton
+} from '@mui/material';
+import DashboardIcon from '@mui/icons-material/Dashboard';
+import AddIcon from '@mui/icons-material/Add';
+import DeleteIcon from '@mui/icons-material/Delete';
+import EditIcon from '@mui/icons-material/Edit';
+import { useNavigate } from 'react-router-dom';
+
+export default function ViewManager({ user }) {
+    const [views, setViews] = useState([]);
+    const [open, setOpen] = useState(false);
+    const [editingId, setEditingId] = useState(null); // ID if editing, null if creating
+    const [viewName, setViewName] = useState('');
+    const [availableDevices, setAvailableDevices] = useState([]);
+    const [viewConfig, setViewConfig] = useState([]); // [{ device, channel, alias, yAxis }]
+
+    // Selection state for new item
+    const [selDevice, setSelDevice] = useState('');
+    const [selChannel, setSelChannel] = useState('');
+    const [alias, setAlias] = useState('');
+    const [yAxis, setYAxis] = useState('left');
+
+    const navigate = useNavigate();
+    const isAdmin = user && user.role === 'admin';
+
+    useEffect(() => {
+        refreshViews();
+        if (isAdmin) {
+            fetch('/api/devices')
+                .then(res => res.json())
+                .then(setAvailableDevices)
+                .catch(console.error);
+        }
+    }, [isAdmin]);
+
+    const refreshViews = () => {
+        fetch('/api/views')
+            .then(res => res.json())
+            .then(setViews)
+            .catch(console.error);
+    };
+
+    const handleOpenCreate = () => {
+        setEditingId(null);
+        setViewName('');
+        setViewConfig([]);
+        setOpen(true);
+    };
+
+    const handleOpenEdit = (v, e) => {
+        e.stopPropagation();
+        setEditingId(v.id);
+        setViewName(v.name);
+
+        // Fetch full config for this view
+        fetch(`/api/views/${v.id}`)
+            .then(res => res.json())
+            .then(data => {
+                // Ensure config items have yAxis (default to left for legacy views)
+                const config = (data.config || []).map(c => ({ ...c, yAxis: c.yAxis || 'left' }));
+                setViewConfig(config);
+                setOpen(true);
+            });
+    };
+
+    const handleDelete = async (id, e) => {
+        e.stopPropagation();
+        if (!window.confirm("Are you sure?")) return;
+        await fetch(`/api/views/${id}`, {
+            method: 'DELETE',
+            headers: { 'Authorization': `Bearer ${user.token}` }
+        });
+        refreshViews();
+    };
+
+    const handleSave = async () => {
+        if (!viewName || viewConfig.length === 0) return;
+
+        const url = editingId ? `/api/views/${editingId}` : '/api/views';
+        const method = editingId ? 'PUT' : 'POST';
+
+        try {
+            const res = await fetch(url, {
+                method: method,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${user.token}`
+                },
+                body: JSON.stringify({ name: viewName, config: viewConfig })
+            });
+
+            if (res.ok) {
+                setOpen(false);
+                refreshViews();
+            } else {
+                alert('Failed to save view');
+            }
+        } catch (err) {
+            console.error(err);
+        }
+    };
+
+    const addConfigItem = () => {
+        if (selDevice && selChannel) {
+            setViewConfig([...viewConfig, {
+                device: selDevice,
+                channel: selChannel,
+                alias: alias || `${selDevice}:${selChannel}`,
+                yAxis: yAxis
+            }]);
+            setAlias('');
+            setYAxis('left');
+        }
+    };
+
+    // Derived state for channels
+    const channelsForDevice = availableDevices.filter(d => d.device === selDevice).map(d => d.channel);
+    const uniqueDevices = [...new Set(availableDevices.map(d => d.device))];
+
+    return (
+        <Container maxWidth="md" sx={{ mt: 4 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
+                <Typography variant="h4">Views</Typography>
+                {isAdmin && (
+                    <Button variant="contained" startIcon={<AddIcon />} onClick={handleOpenCreate}>
+                        Create View
+                    </Button>
+                )}
+            </Box>
+
+            <List>
+                {views.map(view => (
+                    <ListItem
+                        button
+                        key={view.id}
+                        divider
+                        onClick={() => navigate(`/views/${view.id}`)}
+                    >
+                        <ListItemIcon><DashboardIcon /></ListItemIcon>
+                        <ListItemText
+                            primary={view.name}
+                            secondary={`Created: ${new Date(view.created_at).toLocaleDateString()}`}
+                        />
+                        {isAdmin && (
+                            <Box>
+                                <IconButton onClick={(e) => handleOpenEdit(view, e)}><EditIcon /></IconButton>
+                                <IconButton onClick={(e) => handleDelete(view.id, e)}><DeleteIcon /></IconButton>
+                            </Box>
+                        )}
+                    </ListItem>
+                ))}
+                {views.length === 0 && <Typography>No views available.</Typography>}
+            </List>
+
+            {/* Create/Edit Dialog */}
+            <Dialog open={open} onClose={() => setOpen(false)} maxWidth="md" fullWidth>
+                <DialogTitle>{editingId ? 'Edit View' : 'Create New View'}</DialogTitle>
+                <DialogContent>
+                    <TextField
+                        autoFocus
+                        margin="dense"
+                        label="View Name"
+                        fullWidth
+                        value={viewName}
+                        onChange={(e) => setViewName(e.target.value)}
+                    />
+
+                    <Box sx={{ mt: 2, p: 2, border: '1px solid #444', borderRadius: 1 }}>
+                        <Typography variant="subtitle2">Add Channels</Typography>
+                        <Box sx={{ display: 'flex', gap: 1, mt: 1, alignItems: 'center' }}>
+                            <FormControl size="small" sx={{ minWidth: 150 }}>
+                                <InputLabel>Device</InputLabel>
+                                <Select value={selDevice} label="Device" onChange={(e) => setSelDevice(e.target.value)}>
+                                    {uniqueDevices.map(d => <MenuItem key={d} value={d}>{d}</MenuItem>)}
+                                </Select>
+                            </FormControl>
+                            <FormControl size="small" sx={{ minWidth: 150 }}>
+                                <InputLabel>Channel</InputLabel>
+                                <Select value={selChannel} label="Channel" onChange={(e) => setSelChannel(e.target.value)}>
+                                    {channelsForDevice.map(c => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+                                </Select>
+                            </FormControl>
+                            <FormControl size="small" sx={{ minWidth: 100 }}>
+                                <InputLabel>Axis</InputLabel>
+                                <Select value={yAxis} label="Axis" onChange={(e) => setYAxis(e.target.value)}>
+                                    <MenuItem value="left">Left</MenuItem>
+                                    <MenuItem value="right">Right</MenuItem>
+                                </Select>
+                            </FormControl>
+                            <TextField
+                                size="small"
+                                label="Alias (Optional)"
+                                value={alias}
+                                onChange={(e) => setAlias(e.target.value)}
+                                sx={{ flexGrow: 1 }}
+                            />
+                            <Button variant="outlined" onClick={addConfigItem}>Add</Button>
+                        </Box>
+
+                        <Box sx={{ mt: 2, display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                            {viewConfig.map((item, idx) => (
+                                <Chip
+                                    key={idx}
+                                    label={`${item.alias} (${item.yAxis})`}
+                                    onDelete={() => setViewConfig(viewConfig.filter((_, i) => i !== idx))}
+                                />
+                            ))}
+                        </Box>
+                    </Box>
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={() => setOpen(false)}>Cancel</Button>
+                    <Button onClick={handleSave} color="primary">Save</Button>
+                </DialogActions>
+            </Dialog>
+        </Container>
+    );
+}
