@@ -1,3 +1,6 @@
+<img width="1027" height="742" alt="image" src="https://github.com/user-attachments/assets/7f15091e-24b5-447b-8086-b12d94fa7967" />
+
+
 # CTRL Freak
 
 A dashboard and control system for grow tent environments.
