@@ -483,16 +483,24 @@ function compareValues(actual, operator, target) {
     }
 }
 
-// Evaluate a single condition
-function evaluateCondition(condition) {
+// Evaluate a single condition recursively and return detailed status
+function evaluateConditionDetails(condition) {
     const { type, operator, value, channel } = condition;
+    let result = false;
+    let details = { ...condition };
 
     // Handle AND/OR groups
     if (operator === 'AND' || operator === 'OR') {
-        const results = (condition.conditions || []).map(c => evaluateCondition(c));
-        return operator === 'AND'
-            ? results.every(r => r)
-            : results.some(r => r);
+        const subResults = (condition.conditions || []).map(c => evaluateConditionDetails(c));
+        details.conditions = subResults;
+
+        if (operator === 'AND') {
+            result = subResults.every(r => r.__result);
+        } else {
+            result = subResults.some(r => r.__result);
+        }
+        details.__result = result;
+        return details;
     }
 
     switch (type) {
@@ -505,12 +513,13 @@ function evaluateCondition(condition) {
                     const [h, m] = t.split(':').map(Number);
                     return h * 60 + m;
                 });
-                return currentTime >= start && currentTime <= end;
+                result = currentTime >= start && currentTime <= end;
+            } else {
+                const [h, m] = String(value).split(':').map(Number);
+                const targetTime = h * 60 + m;
+                result = compareValues(currentTime, operator, targetTime);
             }
-
-            const [h, m] = String(value).split(':').map(Number);
-            const targetTime = h * 60 + m;
-            return compareValues(currentTime, operator, targetTime);
+            break;
         }
 
         case 'date': {
@@ -518,11 +527,15 @@ function evaluateCondition(condition) {
             const today = now.toISOString().split('T')[0];
 
             if (operator === 'between' && Array.isArray(value)) {
-                return today >= value[0] && today <= value[1];
+                result = today >= value[0] && today <= value[1];
+            } else if (operator === 'before') {
+                result = today < value;
+            } else if (operator === 'after') {
+                result = today > value;
+            } else {
+                result = today === value;
             }
-            if (operator === 'before') return today < value;
-            if (operator === 'after') return today > value;
-            return today === value;
+            break;
         }
 
         case 'sensor': {
@@ -534,22 +547,31 @@ function evaluateCondition(condition) {
                 target = (targetSensorVal * (value.factor || 1)) + (value.offset || 0);
             }
 
-            return compareValues(sensorValue, operator, target);
+            result = compareValues(sensorValue, operator, target);
+            // Store actual value for debugging/display if needed
+            details.__actual = sensorValue;
+            break;
         }
 
         case 'output': {
             const outputValue = getOutputValue(channel);
-            return compareValues(outputValue, operator, value);
+            result = compareValues(outputValue, operator, value);
+            break;
         }
 
         default:
             console.warn(`[RuleRunner] Unknown condition type: ${type}`);
-            return false;
+            result = false;
     }
+
+    details.__result = result;
+    return details;
 }
 
-// Global set to track currently active rule IDs
+// Global set to track currently active rule IDs (compat)
 const activeRuleIds = new Set();
+// Global map to track detailed execution status: ruleId -> conditionTree
+const ruleStatuses = new Map();
 
 // Run all rules
 function runRules() {
@@ -558,8 +580,9 @@ function runRules() {
     try {
         const rules = db.prepare('SELECT * FROM rules WHERE enabled = 1 ORDER BY position ASC').all();
 
-        // Clear active rules list at start of run
+        // Clear active rules lists at start of run
         activeRuleIds.clear();
+        ruleStatuses.clear();
 
         // Default all outputs to OFF (0) - if no rule sets them, they stay off
         const desiredOutputs = {};
@@ -573,7 +596,11 @@ function runRules() {
                 const conditions = JSON.parse(rule.conditions || '{}');
                 const action = JSON.parse(rule.action || '{}');
 
-                if (evaluateCondition(conditions)) {
+                // Evaluate with details
+                const detailedConditions = evaluateConditionDetails(conditions);
+                ruleStatuses.set(rule.id, detailedConditions);
+
+                if (detailedConditions.__result) {
                     // Rule matches - add to active list
                     activeRuleIds.add(rule.id);
 
@@ -601,6 +628,9 @@ function runRules() {
         for (const [channel, value] of Object.entries(desiredOutputs)) {
             writeOutputValue(channel, value);
         }
+
+
+
     } catch (err) {
         console.error('[RuleRunner] Error running rules:', err.message);
     }
@@ -685,7 +715,10 @@ module.exports = {
                 getOutputChannels,
                 getOutputBindings,
                 runRules,
-                activeRuleIds
+                runRules,
+                activeRuleIds,
+                ruleStatuses,
+                writeOutputValue
             });
 
             // Start rule runner

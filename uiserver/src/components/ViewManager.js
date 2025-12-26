@@ -3,7 +3,7 @@ import {
     Container, Typography, Paper, List, ListItem, ListItemText, ListItemIcon,
     Button, TextField, Dialog, DialogTitle, DialogContent, DialogActions,
     FormControl, InputLabel, Select, MenuItem, Box, Chip, IconButton,
-    ToggleButton, ToggleButtonGroup, Slider
+    ToggleButton, ToggleButtonGroup, Slider, Snackbar, Alert, Switch, FormControlLabel
 } from '@mui/material';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import AddIcon from '@mui/icons-material/Add';
@@ -13,7 +13,10 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
+import SettingsInputComponentIcon from '@mui/icons-material/SettingsInputComponent';
+import LinkOffIcon from '@mui/icons-material/LinkOff';
 import { withRouter } from './withRouter';
+import { Link as MuiLink } from '@mui/material';
 import Chart from './Chart';
 
 const RANGES = {
@@ -51,8 +54,11 @@ class ViewManager extends Component {
         this.state = {
             views: [],
             rules: [],
+
             activeRuleIds: [],
+            ruleStatuses: {},
             outputValues: {},
+            outputConfigs: [],
             open: false,
             colorPickerOpen: false,
             colorPickerMode: 'line',
@@ -74,7 +80,13 @@ class ViewManager extends Component {
 
             // Global Time State
             rangeLabel: '1d',
-            windowEnd: null // null = Live
+            windowEnd: null, // null = Live
+
+            // Notifications
+            snackbarOpen: false,
+            snackbarMessage: '',
+            snackbarSeverity: 'info',
+            statusLoaded: false
         };
     }
 
@@ -90,6 +102,7 @@ class ViewManager extends Component {
             this.loadRuleStatus();
         }, 5000);
         if (this.isAdmin()) {
+            this.loadOutputConfigs();
             fetch('/api/devices')
                 .then(res => res.json())
                 .then(devices => this.setState({ availableDevices: devices }))
@@ -105,6 +118,7 @@ class ViewManager extends Component {
         if (prevProps.user !== this.props.user) {
             this.refreshViews();
             if (this.isAdmin()) {
+                this.loadOutputConfigs();
                 fetch('/api/devices')
                     .then(res => res.json())
                     .then(devices => this.setState({ availableDevices: devices }))
@@ -142,8 +156,97 @@ class ViewManager extends Component {
     loadRuleStatus = () => {
         fetch('/api/rules/status')
             .then(res => res.json())
-            .then(data => this.setState({ activeRuleIds: data.activeIds || [] }))
+            .then(data => {
+                const newActiveIds = data.activeIds || [];
+                const newStatuses = data.statuses || {};
+                const prevActiveIds = this.state.activeRuleIds;
+
+                // Use a Set for faster lookup
+                const newSet = new Set(newActiveIds);
+                const prevSet = new Set(prevActiveIds);
+
+                // Find changes
+                const newlyActive = newActiveIds.filter(id => !prevSet.has(id));
+                const newlyInactive = prevActiveIds.filter(id => !newSet.has(id));
+
+                if ((newlyActive.length > 0 || newlyInactive.length > 0) && this.state.statusLoaded) {
+                    const { rules } = this.state;
+                    const messages = [];
+
+                    newlyActive.forEach(id => {
+                        const r = rules.find(rule => rule.id === id);
+                        if (r) messages.push(`${r.name || 'Rule'} Active`);
+                    });
+
+                    newlyInactive.forEach(id => {
+                        const r = rules.find(rule => rule.id === id);
+                        if (r) messages.push(`${r.name || 'Rule'} Inactive`);
+                    });
+
+                    if (messages.length > 0) {
+                        this.showSnackbar(messages.join(', '), 'info');
+                    }
+                }
+
+                this.setState({
+                    activeRuleIds: newActiveIds,
+                    ruleStatuses: newStatuses,
+                    statusLoaded: true
+                });
+            })
             .catch(console.error);
+    };
+
+    showSnackbar = (message, severity = 'info') => {
+        this.setState({
+            snackbarOpen: true,
+            snackbarMessage: message,
+            snackbarSeverity: severity
+        });
+    };
+
+    handleCloseSnackbar = (event, reason) => {
+        if (reason === 'clickaway') {
+            return;
+        }
+        this.setState({ snackbarOpen: false });
+    };
+
+    loadOutputConfigs = () => {
+        fetch('/api/output-configs') // Assuming this endpoint exists from OutputConfigEditor usage
+            .then(res => res.json())
+            .then(configs => this.setState({ outputConfigs: configs }))
+            .catch(console.error); // Non-critical if fails
+    };
+
+    handleOutputChange = (channel, value) => {
+        const { user } = this.props;
+        // Optimistic update
+        this.setState(prev => ({
+            outputValues: {
+                ...prev.outputValues,
+                [channel]: value
+            }
+        }));
+
+        fetch(`/api/outputs/${channel}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${user.token}`
+            },
+            body: JSON.stringify({ value })
+        })
+            .then(res => {
+                if (!res.ok) throw new Error('Failed to set output');
+                // Refresh to confirm
+                this.loadOutputValues();
+            })
+            .catch(err => {
+                console.error(err);
+                this.showSnackbar(`Failed to set ${channel}: ${err.message}`, 'error');
+                this.loadOutputValues(); // Revert on error
+            });
     };
 
     parseViewData(view) {
@@ -182,16 +285,36 @@ class ViewManager extends Component {
     };
 
     // Format conditions for display - returns React components with visual grouping
-    formatRuleConditions = (condition, depth = 0) => {
+    // statusObj is the detailed execution status for this condition from the API
+    formatRuleConditions = (condition, depth = 0, statusObj = null) => {
         if (!condition) return <span style={{ color: '#888' }}>(always)</span>;
 
+        // Determine if this specific part is met based on statusObj
+        const isMet = statusObj && statusObj.__result === true;
+        // Determine if we should highlight this node (met or partially met)
+        // For groups, we might want to color the border or background differently if satisfied
+
+        // Base style for met conditions
+        const metStyle = isMet ? {
+            border: '1px solid #4caf50',
+            bgcolor: 'rgba(76, 175, 80, 0.2)',
+            color: '#fff'
+        } : {};
+
         if (condition.operator === 'AND' || condition.operator === 'OR') {
-            const parts = (condition.conditions || []).map((c, i) => this.formatRuleConditions(c, depth + 1)).filter(Boolean);
+            // Mapping sub-conditions to their status from the statusObj.conditions array
+            const subStatuses = statusObj && statusObj.conditions ? statusObj.conditions : [];
+
+            const parts = (condition.conditions || []).map((c, i) =>
+                this.formatRuleConditions(c, depth + 1, subStatuses[i])
+            ).filter(Boolean);
+
             if (parts.length === 0) return <span style={{ color: '#888' }}>(always)</span>;
 
             const isAnd = condition.operator === 'AND';
-            const borderColor = isAnd ? 'rgba(100, 150, 255, 0.5)' : 'rgba(255, 150, 100, 0.5)';
-            const bgColor = isAnd ? 'rgba(100, 150, 255, 0.08)' : 'rgba(255, 150, 100, 0.08)';
+            // If the group logic itself is satisfied, use green, else use the logical color
+            const borderColor = isMet ? '#4caf50' : (isAnd ? 'rgba(100, 150, 255, 0.5)' : 'rgba(255, 150, 100, 0.5)');
+            const bgColor = isMet ? 'rgba(76, 175, 80, 0.1)' : (isAnd ? 'rgba(100, 150, 255, 0.08)' : 'rgba(255, 150, 100, 0.08)');
             const label = isAnd ? 'ALL' : 'ANY';
             const symbol = isAnd ? 'and' : 'or';
 
@@ -209,6 +332,7 @@ class ViewManager extends Component {
                         px: 0.75,
                         py: 0.25,
                         fontSize: depth > 0 ? '0.9em' : '1em',
+                        transition: 'all 0.3s ease'
                     }}
                 >
                     <Typography
@@ -216,7 +340,7 @@ class ViewManager extends Component {
                         sx={{
                             fontSize: '0.7em',
                             fontWeight: 'bold',
-                            color: isAnd ? '#6496ff' : '#ff9664',
+                            color: isMet ? '#a5d6a7' : (isAnd ? '#6496ff' : '#ff9664'),
                             mr: 0.5,
                         }}
                     >
@@ -231,7 +355,7 @@ class ViewManager extends Component {
                                     sx={{
                                         mx: 0.5,
                                         fontWeight: 'bold',
-                                        color: isAnd ? '#6496ff' : '#ff9664',
+                                        color: isMet ? '#a5d6a7' : (isAnd ? '#6496ff' : '#ff9664'),
                                     }}
                                 >
                                     {symbol}
@@ -248,6 +372,12 @@ class ViewManager extends Component {
         const op = opSymbols[operator] || operator;
 
         let text = '?';
+        let detailText = '';
+        if (statusObj && statusObj.__actual !== undefined) {
+            // Optional: show actual value if available
+            // detailText = ` (${statusObj.__actual})`; 
+        }
+
         switch (type) {
             case 'time':
                 if (operator === 'between' && Array.isArray(value)) {
@@ -281,14 +411,18 @@ class ViewManager extends Component {
             <Typography
                 component="span"
                 sx={{
-                    bgcolor: 'rgba(255, 255, 255, 0.05)',
+                    bgcolor: isMet ? 'rgba(76, 175, 80, 0.4)' : 'rgba(255, 255, 255, 0.05)',
+                    color: isMet ? '#fff' : 'inherit',
+                    border: isMet ? '1px solid #4caf50' : 'none',
                     px: 0.5,
                     py: 0.25,
                     borderRadius: 0.5,
                     whiteSpace: 'nowrap',
+                    transition: 'all 0.3s ease'
                 }}
+                title={statusObj && statusObj.__actual !== undefined ? `Actual: ${statusObj.__actual}` : ''}
             >
-                {text}
+                {text}{detailText}
             </Typography>
         );
     };
@@ -579,19 +713,21 @@ class ViewManager extends Component {
         }
 
         return (
-            <Container maxWidth="xl" sx={{ mt: 4 }}>
+            <Container maxWidth="xl" sx={{ mt: { xs: 1, sm: 2, md: 4 }, px: { xs: 1, sm: 2, md: 3 } }}>
                 <Paper sx={{
                     position: 'sticky',
-                    top: 10,
+                    top: { xs: 0, sm: 10 },
                     zIndex: 1000,
-                    p: 2,
-                    mb: 4,
+                    p: { xs: 1, sm: 2 },
+                    mb: { xs: 1, sm: 2, md: 4 },
                     display: 'flex',
-                    alignItems: 'center',
+                    flexDirection: { xs: 'column', sm: 'row' },
+                    alignItems: { xs: 'stretch', sm: 'center' },
                     justifyContent: 'space-between',
+                    gap: { xs: 1, sm: 0 },
                     bgcolor: 'rgba(20, 30, 50, 0.95)',
                     border: '2px solid #1976d2',
-                    borderRadius: 2,
+                    borderRadius: { xs: 0, sm: 2 },
                     boxShadow: '0 4px 20px rgba(0, 0, 0, 0.5), 0 0 15px rgba(25, 118, 210, 0.3)',
                 }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
@@ -647,33 +783,40 @@ class ViewManager extends Component {
                             )}
                         </Box>
                     </Box>
-                    <Typography variant="h6">{dateDisplay}</Typography>
+                    <Typography variant="h6" sx={{ display: { xs: 'none', md: 'block' }, fontSize: { sm: '0.9rem', md: '1.25rem' } }}>{dateDisplay}</Typography>
                     {isAdmin && <Button variant="contained" startIcon={<AddIcon />} onClick={this.handleOpenCreate}>Create View</Button>}
                 </Paper>
 
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: { xs: 1, sm: 2, md: 4 } }}>
                     {views.map((view, vIdx) => {
                         const { channels, axes } = this.parseViewData(view);
                         return (
-                            <Paper key={view.id} sx={{ p: 2, display: 'flex', flexDirection: 'column' }}>
-                                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                        <Typography variant="h4">{view.name}</Typography>
+                            <Box key={view.id} sx={{
+                                p: { xs: 0.5, sm: 1, md: 1.5 },
+                                bgcolor: 'background.paper',
+                                borderRadius: 1,
+                                height: { xs: '320px', sm: '420px', md: '520px' },
+                                display: 'flex',
+                                flexDirection: 'column'
+                            }}>
+                                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 0.5 }}>
+                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                        <Typography variant="h6" sx={{ fontSize: { xs: '0.9rem', sm: '1.1rem', md: '1.25rem' } }}>{view.name}</Typography>
                                         {isAdmin && (
                                             <>
-                                                <IconButton size="small" onClick={() => this.moveView(vIdx, -1)} disabled={vIdx === 0}><ArrowUpwardIcon /></IconButton>
-                                                <IconButton size="small" onClick={() => this.moveView(vIdx, 1)} disabled={vIdx === views.length - 1}><ArrowDownwardIcon /></IconButton>
+                                                <IconButton size="small" sx={{ p: 0.25 }} onClick={() => this.moveView(vIdx, -1)} disabled={vIdx === 0}><ArrowUpwardIcon sx={{ fontSize: '1rem' }} /></IconButton>
+                                                <IconButton size="small" sx={{ p: 0.25 }} onClick={() => this.moveView(vIdx, 1)} disabled={vIdx === views.length - 1}><ArrowDownwardIcon sx={{ fontSize: '1rem' }} /></IconButton>
                                             </>
                                         )}
                                     </Box>
                                     {isAdmin && (
                                         <Box>
-                                            <IconButton onClick={(e) => this.handleOpenEdit(view, e)}><EditIcon /></IconButton>
-                                            <IconButton onClick={(e) => this.handleDelete(view.id, e)}><DeleteIcon /></IconButton>
+                                            <IconButton size="small" sx={{ p: 0.25 }} onClick={(e) => this.handleOpenEdit(view, e)}><EditIcon sx={{ fontSize: '1rem' }} /></IconButton>
+                                            <IconButton size="small" sx={{ p: 0.25 }} onClick={(e) => this.handleDelete(view.id, e)}><DeleteIcon sx={{ fontSize: '1rem' }} /></IconButton>
                                         </Box>
                                     )}
                                 </Box>
-                                <Box sx={{ height: '500px' }}>
+                                <Box sx={{ flex: 1, minHeight: 0 }}>
                                     <Chart
                                         channelConfig={channels.map(c => ({
                                             id: `${c.device}:${c.channel}`,
@@ -689,53 +832,168 @@ class ViewManager extends Component {
                                         range={rangeMs}
                                     />
                                 </Box>
-                            </Paper>
+                            </Box>
                         );
                     })}
                     {views.length === 0 && <Typography>No views available.</Typography>}
 
                     {/* Rules Summary */}
                     {this.state.rules.length > 0 && (
-                        <Paper sx={{ p: 2, mt: 4 }}>
-                            <Typography variant="h5" sx={{ mb: 2 }}>🤖 Active Rules</Typography>
+                        <Box sx={{ p: { xs: 0.5, sm: 1, md: 2 }, bgcolor: 'background.paper', borderRadius: 1 }}>
+                            <Typography variant="h6" sx={{ mb: 1, fontSize: { xs: '0.9rem', sm: '1.1rem', md: '1.25rem' } }}>🤖 Active Rules</Typography>
                             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                                 {this.state.rules.filter(r => r.enabled).map((rule, idx) => {
                                     const isActive = this.state.activeRuleIds.includes(rule.id);
+                                    const statusObj = this.state.ruleStatuses ? this.state.ruleStatuses[rule.id] : null;
+
                                     return (
                                         <Box
                                             key={rule.id}
                                             sx={{
-                                                p: 1.5,
-                                                bgcolor: isActive ? 'rgba(76, 175, 80, 0.15)' : 'background.paper',
+                                                border: isActive ? '1px solid #4caf50' : '1px solid rgba(255, 255, 255, 0.1)',
+                                                bgcolor: isActive ? 'rgba(76, 175, 80, 0.05)' : 'rgba(0, 0, 0, 0.2)',
+                                                p: { xs: 0.75, sm: 1, md: 1.5 },
                                                 borderRadius: 1,
-                                                border: isActive ? '1px solid #4caf50' : '1px solid #504945',
                                                 display: 'flex',
-                                                alignItems: 'center',
-                                                gap: 2
+                                                flexDirection: { xs: 'column', sm: 'row' },
+                                                alignItems: { xs: 'flex-start', sm: 'center' },
+                                                justifyContent: 'space-between',
+                                                gap: { xs: 0.5, sm: 0 },
+                                                opacity: isActive ? 1 : 0.7
                                             }}
                                         >
-                                            <Typography sx={{ fontSize: '1.2em' }}>
-                                                {this.getRuleEmoji(rule)}
-                                            </Typography>
-                                            <Box sx={{ flex: 1 }}>
-                                                <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-                                                    {rule.name}
-                                                </Typography>
-                                                <Typography variant="body2" color="text.secondary">
-                                                    {this.formatRuleConditions(rule.conditions)} → {this.formatRuleAction(rule.action)}
+                                            <Box sx={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', mb: 0.5 }}>
+                                                    <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: isActive ? '#a5d6a7' : 'inherit', fontSize: { xs: '0.8rem', sm: '0.875rem' } }}>
+                                                        {this.getRuleEmoji(rule)} {rule.name || `Rule #${idx + 1}`}
+                                                    </Typography>
+                                                    {isActive && <Chip label="Active" size="small" color="success" variant="outlined" sx={{ height: 18, fontSize: '0.65rem', '& .MuiChip-label': { px: 0.75 } }} />}
+                                                </Box>
+                                                <Typography variant="body2" sx={{ color: 'text.secondary', display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap', fontSize: { xs: '0.7rem', sm: '0.8rem' } }}>
+                                                    IF {this.formatRuleConditions(rule.conditions || {}, 0, statusObj)} THEN {this.formatRuleAction(rule.action || {})}
                                                 </Typography>
                                             </Box>
-                                            <Typography sx={{ fontSize: '0.85em', color: 'text.secondary' }}>
-                                                #{idx + 1}
-                                            </Typography>
+                                            {statusObj && statusObj.__actual !== undefined && (
+                                                <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                                                    {Number(statusObj.__actual).toFixed(1)}
+                                                </Typography>
+                                            )}
                                         </Box>
                                     );
                                 })}
                             </Box>
+                        </Box>
+                    )}
 
+                    {/* Admin: All Outputs Control */}
+                    {isAdmin && (
+                        <Paper sx={{ p: 2, mt: 4, mb: 8, border: '1px solid #d79921', bgcolor: 'rgba(215, 153, 33, 0.05)' }}>
+                            <Typography variant="h5" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <SettingsInputComponentIcon color="primary" /> Output Override
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+                                Manually override output values. Note that active rules will overwrite these values on the next tick (every 10s).
+                                Unmapped outputs (not controlled by any rule) are highlighted with an icon.
+                            </Typography>
+
+                            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 2 }}>
+                                {(() => {
+                                    // 1. Get all config channels
+                                    const { outputValues, configs = [], rules = [] } = this.state;
+
+                                    // Identify outputs controlled by rules
+                                    const ruleControlledOutputs = new Set();
+                                    rules.forEach(r => {
+                                        if (!r.enabled) return;
+                                        try {
+                                            const action = r.action || {};
+                                            if (action.channel) ruleControlledOutputs.add(action.channel);
+                                        } catch (e) { }
+                                    });
+
+                                    // Check if configs is populated (we may need to fetch it if ViewManager doesn't have it yet)
+                                    // Actually ViewManager didn't have configs in state, let's look at availableDevices or outputValues
+                                    // Better: allow ViewManager to fetch '/api/outputs' (configs) on mount if admin.
+                                    // For now, let's use outputValues keys combined with available devices or just iterate outputValues? 
+                                    // outputValues only has values, not types. We need types.
+                                    // Let's assume we fetch configs. If not, fallback to outputValues keys.
+
+                                    const allChannels = new Set((this.state.outputConfigs || []).map(c => c.channel));
+                                    const sortedChannels = Array.from(allChannels).sort();
+
+                                    return sortedChannels.map(channel => {
+                                        const config = (this.state.outputConfigs || []).find(c => c.channel === channel) || {};
+                                        const isMapped = ruleControlledOutputs.has(channel);
+                                        const value = outputValues[channel] || 0;
+                                        const isBoolean = config.value_type
+                                            ? config.value_type === 'boolean'
+                                            : ((value === 0 || value === 1) && !channel.includes('Level')); // Guess bool if 0/1 AND name doesn't imply numeric
+
+                                        return (
+                                            <Paper
+                                                key={channel}
+                                                elevation={3}
+                                                sx={{
+                                                    p: 2,
+                                                    borderLeft: isMapped ? '4px solid #4caf50' : '4px solid #fb4934',
+                                                    bgcolor: 'rgba(255, 255, 255, 0.05)'
+                                                }}
+                                            >
+                                                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
+                                                    <Box>
+                                                        <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 'bold' }}>{channel}</Typography>
+                                                        {config.description && <Typography variant="caption" color="text.secondary">{config.description}</Typography>}
+                                                    </Box>
+                                                    {!isMapped && (
+                                                        <Chip
+                                                            icon={<LinkOffIcon sx={{ fontSize: '1rem !important' }} />}
+                                                            label="Unmapped"
+                                                            size="small"
+                                                            color="error"
+                                                            variant="outlined"
+                                                            sx={{ height: 20, fontSize: '0.65rem' }}
+                                                        />
+                                                    )}
+                                                </Box>
+
+                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mt: 1 }}>
+                                                    {isBoolean ? (
+                                                        <FormControlLabel
+                                                            control={
+                                                                <Switch
+                                                                    checked={value > 0}
+                                                                    onChange={(e) => this.handleOutputChange(channel, e.target.checked ? 1 : 0)}
+                                                                    color={isMapped ? "success" : "warning"}
+                                                                />
+                                                            }
+                                                            label={value > 0 ? "ON" : "OFF"}
+                                                        />
+                                                    ) : (
+                                                        <Box sx={{ width: '100%' }}>
+                                                            <MuiLink sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                                                                <Typography variant="body2">Value: {value}</Typography>
+                                                            </MuiLink>
+                                                            <Slider
+                                                                value={value}
+                                                                min={config.min_value || 0}
+                                                                max={config.max_value || 10}
+                                                                step={0.1}
+                                                                onChange={(e, val) => this.handleOutputChange(channel, val)}
+                                                                valueLabelDisplay="auto"
+                                                                sx={{ color: isMapped ? 'success.main' : 'warning.main' }}
+                                                            />
+                                                        </Box>
+                                                    )}
+                                                </Box>
+                                            </Paper>
+                                        );
+                                    });
+                                })()}
+                            </Box>
                         </Paper>
                     )}
                 </Box>
+
 
                 {/* Scroll space at end of page */}
                 <Box sx={{ height: 200 }} />
@@ -872,6 +1130,17 @@ class ViewManager extends Component {
                         </Box>
                     </DialogContent>
                 </Dialog>
+
+                <Snackbar
+                    open={this.state.snackbarOpen}
+                    autoHideDuration={6000}
+                    onClose={this.handleCloseSnackbar}
+                    anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                >
+                    <Alert onClose={this.handleCloseSnackbar} severity={this.state.snackbarSeverity} sx={{ width: '100%' }}>
+                        {this.state.snackbarMessage}
+                    </Alert>
+                </Snackbar>
             </Container>
         );
     }

@@ -2,7 +2,25 @@
  * Outputs API - Output channel definitions and values
  */
 
-module.exports = function setupOutputsApi(app, { db, getOutputChannels, getOutputBindings }) {
+module.exports = function setupOutputsApi(app, { db, getOutputChannels, getOutputBindings, writeOutputValue, checkAuth, requireAdmin }) {
+    // POST /api/outputs/:channel - Set output value (Admin only)
+    app.post('/api/outputs/:channel', checkAuth, requireAdmin, (req, res) => {
+        try {
+            const { channel } = req.params;
+            const { value } = req.body;
+
+            if (value === undefined) {
+                return res.status(400).json({ error: 'Missing value' });
+            }
+
+            console.log(`[API] Manually setting output ${channel} to ${value}`);
+            writeOutputValue(channel, parseFloat(value));
+
+            res.json({ success: true, channel, value });
+        } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+    });
     // GET /api/outputs - List output channel definitions
     app.get('/api/outputs', (req, res) => {
         res.json(getOutputChannels());

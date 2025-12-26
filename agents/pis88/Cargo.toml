@@ -1,0 +1,27 @@
+[package]
+name = "pis88"
+version = "0.1.0"
+edition = "2021"
+description = "S88 CO2 Sensor Agent"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+log = "0.4"
+env_logger = "0.11"
+clap = { version = "4", features = ["derive", "env"] }
+# Serial port communication
+serialport = { version = "4.2", default-features = false }
+# For sleep/timing
+chrono = "0.4"
+url = "2.5"
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

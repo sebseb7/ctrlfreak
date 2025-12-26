@@ -118,7 +118,7 @@ export default class Chart extends Component {
             flashStates: {} // { channelId: 'up' | 'down' | null } - for flash animation
         };
         this.interval = null;
-        this.flashTimeouts = {}; // Store timeouts to clear flash states
+        this.interval = null;
     }
 
     componentDidMount() {
@@ -159,8 +159,6 @@ export default class Chart extends Component {
         if (this.interval) {
             clearInterval(this.interval);
         }
-        // Clear any pending flash timeouts
-        Object.values(this.flashTimeouts).forEach(timeout => clearTimeout(timeout));
     }
 
     getEffectiveChannels(props) {
@@ -334,21 +332,13 @@ export default class Chart extends Component {
                             newLastValues[channelId] = newVal;
                             const oldVal = this.state.lastValues[channelId];
 
-                            // Only flash if we had a previous value and it changed
+                            // Determine state based on change
                             if (oldVal !== undefined && oldVal !== newVal) {
                                 const direction = newVal > oldVal ? 'up' : 'down';
                                 newFlashStates[channelId] = direction;
-                                console.log(`[Flash] ${channelId}: ${oldVal} → ${newVal} (${direction})`);
-
-                                // Clear flash after 1 second
-                                if (this.flashTimeouts[channelId]) {
-                                    clearTimeout(this.flashTimeouts[channelId]);
-                                }
-                                this.flashTimeouts[channelId] = setTimeout(() => {
-                                    this.setState(prev => ({
-                                        flashStates: { ...prev.flashStates, [channelId]: null }
-                                    }));
-                                }, 1000);
+                            } else if (oldVal !== undefined && oldVal === newVal) {
+                                // Reset to neutral if values match
+                                newFlashStates[channelId] = null;
                             }
                         }
                     });
@@ -522,89 +512,87 @@ export default class Chart extends Component {
         ];
 
         return (
-            <Box sx={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', p: 2, boxSizing: 'border-box' }}>
-                <Paper sx={{ p: 2, flexGrow: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
-                    {/* Custom Interactive Legend */}
-                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, justifyContent: 'center', mb: 1, py: 0.5 }}>
-                        {legendItems.map(item => {
-                            const flash = flashStates[item.id];
-                            const flashColor = flash === 'up' ? 'rgba(76, 175, 80, 0.4)' : flash === 'down' ? 'rgba(244, 67, 54, 0.4)' : 'transparent';
-                            return (
+            <Box sx={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box' }}>
+                {/* Custom Interactive Legend */}
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, justifyContent: 'center', mb: 0.5, py: 0.25 }}>
+                    {legendItems.map(item => {
+                        const flash = flashStates[item.id];
+                        const flashColor = flash === 'up' ? 'rgba(76, 175, 80, 0.4)' : flash === 'down' ? 'rgba(244, 67, 54, 0.4)' : 'transparent';
+                        return (
+                            <Box
+                                key={item.id}
+                                onClick={() => this.toggleSeries(item.id)}
+                                sx={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 0.5,
+                                    cursor: 'pointer',
+                                    opacity: item.hidden ? 0.4 : 1,
+                                    textDecoration: item.hidden ? 'line-through' : 'none',
+                                    transition: 'opacity 0.2s, background-color 0.3s',
+                                    userSelect: 'none',
+                                    backgroundColor: flashColor,
+                                    borderRadius: 1,
+                                    px: 0.5,
+                                    '&:hover': { opacity: item.hidden ? 0.6 : 0.8 },
+                                }}
+                            >
                                 <Box
-                                    key={item.id}
-                                    onClick={() => this.toggleSeries(item.id)}
                                     sx={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: 0.5,
-                                        cursor: 'pointer',
-                                        opacity: item.hidden ? 0.4 : 1,
-                                        textDecoration: item.hidden ? 'line-through' : 'none',
-                                        transition: 'opacity 0.2s, background-color 0.3s',
-                                        userSelect: 'none',
-                                        backgroundColor: flashColor,
-                                        borderRadius: 1,
-                                        px: 0.5,
-                                        '&:hover': { opacity: item.hidden ? 0.6 : 0.8 },
+                                        width: 12,
+                                        height: 12,
+                                        borderRadius: '50%',
+                                        bgcolor: item.color,
+                                        border: '2px solid',
+                                        borderColor: item.hidden ? 'grey.500' : item.color,
                                     }}
-                                >
-                                    <Box
-                                        sx={{
-                                            width: 14,
-                                            height: 14,
-                                            borderRadius: '50%',
-                                            bgcolor: item.color,
-                                            border: '2px solid',
-                                            borderColor: item.hidden ? 'grey.500' : item.color,
-                                        }}
-                                    />
-                                    <Typography variant="body2" component="span">
-                                        {item.label}
-                                    </Typography>
-                                </Box>
-                            );
-                        })}
-                    </Box>
-                    <Box sx={{ flexGrow: 1, width: '100%', height: '100%' }}>
-                        <LineChart
-                            dataset={data}
-                            series={series}
-                            xAxis={[{
-                                dataKey: 'time',
-                                scaleType: 'time',
-                                min: new Date(axisStart),
-                                max: new Date(axisEnd),
-                                valueFormatter: (date) => date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                            }]}
-                            yAxis={yAxes}
+                                />
+                                <Typography variant="body2" component="span" sx={{ fontSize: '0.75rem' }}>
+                                    {item.label}
+                                </Typography>
+                            </Box>
+                        );
+                    })}
+                </Box>
+                <Box sx={{ flexGrow: 1, width: '100%', minHeight: 0 }}>
+                    <LineChart
+                        dataset={data}
+                        series={series}
+                        xAxis={[{
+                            dataKey: 'time',
+                            scaleType: 'time',
+                            min: new Date(axisStart),
+                            max: new Date(axisEnd),
+                            valueFormatter: (date) => date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                        }]}
+                        yAxis={yAxes}
 
-                            hideLegend
-                            slotProps={{
-                            }}
-                            sx={{
-                                '& .MuiLineElement-root': {
-                                    strokeWidth: 3,
-                                },
-                                '& .MuiAreaElement-root': {
-                                    fillOpacity: series.find(s => s.area)?.fillOpacity ?? 0.5,
-                                },
-                            }}
-                        >
-                            {/* Green reference band for temperature charts (20-25°C) */}
-                            {isTemperatureOnly && (
-                                <ReferenceArea yMin={20} yMax={25} color="rgba(76, 175, 80, 0.2)" />
-                            )}
-                            {/* Green reference band for humidity charts (50-70%) */}
-                            {isHumidityOnly && (
-                                <ReferenceArea yMin={50} yMax={70} color="rgba(76, 175, 80, 0.2)" />
-                            )}
-                            {/* Time-based vertical bands for light charts (6-hour intervals) */}
-                            {isLightOnly && (
-                                <TimeReferenceAreas axisStart={axisStart} axisEnd={axisEnd} colors={lightBandColors} />
-                            )}
-                        </LineChart>
-                    </Box>
-                </Paper>
+                        hideLegend
+                        slotProps={{
+                        }}
+                        sx={{
+                            '& .MuiLineElement-root': {
+                                strokeWidth: 3,
+                            },
+                            '& .MuiAreaElement-root': {
+                                fillOpacity: series.find(s => s.area)?.fillOpacity ?? 0.5,
+                            },
+                        }}
+                    >
+                        {/* Green reference band for temperature charts (20-25°C) */}
+                        {isTemperatureOnly && (
+                            <ReferenceArea yMin={20} yMax={25} color="rgba(76, 175, 80, 0.2)" />
+                        )}
+                        {/* Green reference band for humidity charts (50-70%) */}
+                        {isHumidityOnly && (
+                            <ReferenceArea yMin={50} yMax={70} color="rgba(76, 175, 80, 0.2)" />
+                        )}
+                        {/* Time-based vertical bands for light charts (6-hour intervals) */}
+                        {isLightOnly && (
+                            <TimeReferenceAreas axisStart={axisStart} axisEnd={axisEnd} colors={lightBandColors} />
+                        )}
+                    </LineChart>
+                </Box>
             </Box>
         );
     }

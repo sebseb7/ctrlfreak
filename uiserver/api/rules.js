@@ -2,13 +2,25 @@
  * Rules API - CRUD for automation rules
  */
 
-module.exports = function setupRulesApi(app, { db, checkAuth, requireAdmin, runRules, activeRuleIds }) {
+module.exports = function setupRulesApi(app, { db, checkAuth, requireAdmin, runRules, activeRuleIds, ruleStatuses }) {
     // Apply checkAuth middleware to rules routes
     app.use('/api/rules', checkAuth);
 
-    // GET /api/rules/status - Get currently active rule IDs
+    // GET /api/rules/status - Get currently active rule IDs and detailed status
     app.get('/api/rules/status', (req, res) => {
-        res.json({ activeIds: Array.from(activeRuleIds) });
+
+
+        // Convert Map to Object for JSON serialization
+        const statuses = {};
+        if (ruleStatuses) {
+            ruleStatuses.forEach((value, key) => {
+                statuses[key] = value;
+            });
+        }
+        res.json({
+            activeIds: Array.from(activeRuleIds),
+            statuses: statuses
+        });
     });
 
     // GET /api/rules - List all rules
@@ -89,11 +101,14 @@ module.exports = function setupRulesApi(app, { db, checkAuth, requireAdmin, runR
                 if (!!oldRule.enabled !== !!enabled) {
                     changes.push(`enabled: ${oldRule.enabled ? 'on' : 'off'} → ${enabled ? 'on' : 'off'}`);
                 }
-                const oldConditions = oldRule.conditions || '{}';
-                const newConditions = JSON.stringify(conditions);
-                if (oldConditions !== newConditions) {
-                    changes.push('conditions changed');
+
+                // Detailed condition diff
+                const oldConditions = JSON.parse(oldRule.conditions || '{}');
+                const conditionDiffs = getConditionDiff(oldConditions, conditions);
+                if (conditionDiffs.length > 0) {
+                    changes.push(...conditionDiffs);
                 }
+
                 const oldAction = oldRule.action || '{}';
                 const newAction = JSON.stringify(action);
                 if (oldAction !== newAction) {
@@ -124,6 +139,72 @@ module.exports = function setupRulesApi(app, { db, checkAuth, requireAdmin, runR
             res.status(500).json({ error: err.message });
         }
     });
+
+    // Helper to generate human readable diffs for conditions
+    function getConditionDiff(oldC, newC) {
+        if (!oldC && !newC) return [];
+        if (!oldC || !newC) return ['conditions structure changed'];
+
+        const fmt = (c) => {
+            if (!c) return 'null';
+            if (['AND', 'OR'].includes(c.operator)) return `${c.operator} Group`;
+            let val = c.value;
+            if (typeof val === 'object' && val?.type === 'dynamic') {
+                val = `(${val.channel}*${val.factor}+${val.offset})`;
+            }
+            return `${c.channel || '?'} ${c.operator} ${val}`;
+        };
+
+        const isGroupOld = ['AND', 'OR'].includes(oldC.operator);
+        const isGroupNew = ['AND', 'OR'].includes(newC.operator);
+
+        // If structure type mismatch (Group vs Leaf)
+        if (isGroupOld !== isGroupNew) {
+            return [`${fmt(oldC)} → ${fmt(newC)}`];
+        }
+
+        if (isGroupOld) {
+            if (oldC.operator !== newC.operator) {
+                return [`Logic: ${oldC.operator} → ${newC.operator}`];
+            }
+
+            const oldSub = oldC.conditions || [];
+            const newSub = newC.conditions || [];
+
+            // If same size, compare specific positions (likely modifications)
+            if (oldSub.length === newSub.length) {
+                const diffs = [];
+                for (let i = 0; i < oldSub.length; i++) {
+                    diffs.push(...getConditionDiff(oldSub[i], newSub[i]));
+                }
+                return diffs;
+            }
+
+            // Size changed: Find added/removed
+            const oldStrs = oldSub.map(c => JSON.stringify(c));
+            const newStrs = newSub.map(c => JSON.stringify(c));
+
+            const added = newSub.filter((c, i) => !oldStrs.includes(newStrs[i]));
+            const removed = oldSub.filter((c, i) => !newStrs.includes(oldStrs[i]));
+
+            const diffs = [];
+            added.forEach(c => diffs.push(`Added to ${oldC.operator}: ${fmt(c)}`));
+            removed.forEach(c => diffs.push(`Removed from ${oldC.operator}: ${fmt(c)}`));
+
+            if (diffs.length === 0) {
+                // Fallback (e.g. reorder or identical content duplicates)
+                return [`${oldC.operator} group size: ${oldSub.length} → ${newSub.length}`];
+            }
+            return diffs;
+        }
+
+        // Leaf comparisons
+        if (JSON.stringify(oldC) !== JSON.stringify(newC)) {
+            return [`${fmt(oldC)} → ${fmt(newC)}`];
+        }
+
+        return [];
+    }
 
     // DELETE /api/rules/:id - Delete rule (admin only)
     app.delete('/api/rules/:id', requireAdmin, (req, res) => {

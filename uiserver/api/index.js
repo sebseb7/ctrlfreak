@@ -9,9 +9,10 @@ const setupOutputsApi = require('./outputs');
 const setupOutputConfigApi = require('./output-config');
 const setupDevicesApi = require('./devices');
 const setupReadingsApi = require('./readings');
+const setupChangelogApi = require('./changelog');
 
 module.exports = function setupAllApis(app, context) {
-    const { db, bcrypt, jwt, JWT_SECRET, getOutputChannels, getOutputBindings, runRules, activeRuleIds } = context;
+    const { db, bcrypt, jwt, JWT_SECRET, getOutputChannels, getOutputBindings, runRules, activeRuleIds, ruleStatuses, writeOutputValue } = context;
 
     // Auth middleware helpers
     const checkAuth = (req, res, next) => {
@@ -37,9 +38,10 @@ module.exports = function setupAllApis(app, context) {
     // Setup all API routes
     setupAuthApi(app, { db, bcrypt, jwt, JWT_SECRET });
     setupViewsApi(app, { db, checkAuth, requireAdmin });
-    setupRulesApi(app, { db, checkAuth, requireAdmin, runRules, activeRuleIds });
+    setupRulesApi(app, { db, checkAuth, requireAdmin, runRules, activeRuleIds, ruleStatuses });
     setupOutputConfigApi(app, { db, checkAuth, requireAdmin });
-    setupOutputsApi(app, { db, getOutputChannels, getOutputBindings });
+    setupOutputsApi(app, { db, getOutputChannels, getOutputBindings, writeOutputValue, checkAuth, requireAdmin });
     setupDevicesApi(app, { db, getOutputChannels });
     setupReadingsApi(app, { db });
+    setupChangelogApi(app, { db, checkAuth, requireAdmin });
 };

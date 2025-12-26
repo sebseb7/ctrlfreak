@@ -42,10 +42,14 @@ class Login extends Component {
         return (
             <Container maxWidth="xs" sx={{ mt: 8 }}>
                 <Paper sx={{ p: 4, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                    <Typography variant="h5" gutterBottom>Login</Typography>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 2 }}>
+                        <img src="/ctrlfrk.png" alt="CTRL Freak Logo" style={{ height: 120, marginBottom: 16 }} />
+                        <Typography variant="h5">Login</Typography>
+                    </Box>
                     {error && <Typography color="error">{error}</Typography>}
                     <Box component="form" onSubmit={this.handleSubmit} sx={{ mt: 1, width: '100%' }}>
                         <TextField
+                            variant="filled"
                             margin="normal"
                             required
                             fullWidth
@@ -54,6 +58,7 @@ class Login extends Component {
                             onChange={(e) => this.setState({ username: e.target.value })}
                         />
                         <TextField
+                            variant="filled"
                             margin="normal"
                             required
                             fullWidth
