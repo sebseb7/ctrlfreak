@@ -21,3 +21,6 @@ npm run dev
 ## License
 
 0BSD
+
+
+<img width="1014" height="991" alt="image" src="https://github.com/user-attachments/assets/14a62402-ad7c-4c3a-9511-8dde76bd1857" />
